@@ -1,1 +1,330 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ReguLens | NatChain Six</title><link rel="stylesheet" href="/static/style.css"><script defer src="/static/app.js"></script></head><body><header><img src="/static/natwest.png" alt="NatWest"><span>ReguLens / NatChain Six</span><small>LangChain hackathon prototype</small></header><main><section class="hero"><div><p class="eyebrow">CONTINUOUS REGULATORY ASSURANCE</p><h1>Every source. Every change.</h1><p id="status" role="status">Connecting to agent worker…</p><small id="mode"></small></div><div id="radar" aria-hidden="true">AI</div></section><div id="metrics" class="metrics"></div><section class="panel"><h2>Agent orchestration</h2><div id="pipeline" class="pipeline"></div><progress id="progress" max="1" value="0"></progress><p id="agents"></p></section><div class="workspace"><aside class="panel"><h2>Source inventory</h2><div id="sources"></div></aside><section class="panel"><h2 id="heading">Findings</h2><div id="metadata"></div><label>Severity <select id="filter"><option>ALL</option><option>CRITICAL</option><option>HIGH</option><option>MEDIUM</option><option>LOW</option></select></label><div id="findings"></div></section></div><section class="panel" id="judge-panel"><h2>AI Judge · Scan evaluation</h2><p>Reference benchmark and evidence checks — not a legal certification.</p><button id="judge-button">Show evaluation for selected source</button><div id="judge-results" hidden></div></section><section class="panel"><h2>Live activity</h2><div id="events"></div></section></main><button id="chat-toggle" aria-controls="chat" aria-expanded="false">✦ AI assistant</button><section id="chat" class="chat panel" hidden><div class="chat-head"><h2>ReguLens assistant</h2><button id="close" aria-label="Close assistant">×</button></div><div id="messages" role="log" aria-live="polite"></div><form id="chat-form"><label for="prompt">Ask about the selected source</label><input id="prompt" maxlength="300" placeholder="Rescan and verify the fix" required><button>Send</button></form><button id="rescan">Rescan selected source</button><small>Supported commands: rescan, verify fix, status. No code is modified.</small></section></body></html>
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ReguLens | NatChain Six</title>
+<link rel="stylesheet" href="/static/style.css">
+<script defer src="/static/app.js"></script>
+</head>
+<body>
+
+<!-- Sidebar -->
+<aside class="sidebar" aria-label="Primary">
+  <div>
+    <div class="brand">
+      <img src="/static/natwest.png" alt="NatWest" class="brand-logo">
+      <div>
+        <strong>ReguLens</strong>
+        <small>Autonomous assurance</small>
+      </div>
+    </div>
+    <div class="env-card">
+      <span class="muted small">Mode</span>
+      <span id="mode-pill" class="pill">—</span>
+    </div>
+    <nav>
+      <p class="nav-group">Core protocols</p>
+      <a href="#cockpit" data-nav="cockpit"><span class="glyph" aria-hidden="true">◫</span>Compliance Cockpit</a>
+      <a href="#sources" data-nav="sources"><span class="glyph" aria-hidden="true">⇣</span>Context Ingestion</a>
+      <a href="#agent-audit" data-nav="agent-audit"><span class="glyph" aria-hidden="true">◎</span>Agent Audit</a>
+      <a href="#findings" data-nav="findings"><span class="glyph" aria-hidden="true">☑</span>Findings &amp; Remediation</a>
+      <a href="#rulesets" data-nav="rulesets"><span class="glyph" aria-hidden="true">§</span>Regulatory Rulesets</a>
+    </nav>
+  </div>
+  <nav class="sidebar-bottom">
+    <p class="nav-group">System administration</p>
+    <a href="#ledger" data-nav="ledger"><span class="glyph" aria-hidden="true">▤</span>Audit Ledger</a>
+    <a href="#settings" data-nav="settings"><span class="glyph" aria-hidden="true">⚙</span>Settings</a>
+    <p class="muted small sidebar-foot">Local single-user prototype. No authentication.</p>
+  </nav>
+</aside>
+
+<!-- Top bar -->
+<header class="topbar">
+  <div class="top-left">
+    <span class="chip"><span class="dot ok"></span>UK FCA &amp; CCA rulebook engine</span>
+    <span class="chip">Selected: <strong id="selected-name">None</strong></span>
+    <label class="search">
+      <span aria-hidden="true">⌕</span>
+      <input id="search" type="search" placeholder="Search findings, files, regulations…" aria-label="Search findings, files and regulations" autocomplete="off">
+      <kbd>⌘K</kbd>
+    </label>
+  </div>
+  <div class="top-right">
+    <span id="header-status" class="chip" role="status">Connecting…</span>
+    <a href="#ledger" class="icon-btn" id="bell" aria-label="Alert queue">
+      🔔<span id="bell-count" class="badge" hidden></span>
+    </a>
+    <div class="operator">
+      <strong>Local operator</strong>
+      <small>Single-user prototype</small>
+    </div>
+  </div>
+</header>
+
+<main class="content">
+  <div id="warning" class="banner" role="alert" hidden></div>
+
+  <!-- ============ COCKPIT ============ -->
+  <section class="view" id="view-cockpit" data-view="cockpit">
+    <div class="hero">
+      <div>
+        <p class="eyebrow">Continuous regulatory assurance</p>
+        <h1>Every source. Every change.</h1>
+        <p id="status" class="hero-status">Connecting to agent worker…</p>
+        <small id="mode-note" class="hero-note"></small>
+      </div>
+      <div class="hero-actions">
+        <button id="export" class="btn">⬇ Export report</button>
+        <button id="cockpit-rescan" class="btn primary">⟳ Rescan selected source</button>
+      </div>
+    </div>
+
+    <div id="kpis" class="kpis"></div>
+
+    <div class="grid-main">
+      <section class="card">
+        <div class="card-head">
+          <div>
+            <h2>Active audit streams</h2>
+            <p class="muted small">Every discovered source and its latest reviewed revision</p>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Source</th><th>Provider</th><th>Files</th><th>Risk</th><th>Revision</th><th>Reviewed</th><th></th>
+              </tr>
+            </thead>
+            <tbody id="streams"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <aside class="stack">
+        <section class="card">
+          <h2>Statutory risk matrix</h2>
+          <p class="muted small">Finding status across all reviewed sources</p>
+          <div id="matrix"></div>
+        </section>
+        <section class="card">
+          <h2>Defensibility coverage</h2>
+          <p class="muted small">Share of eligible files reviewed in the latest scans</p>
+          <div class="meter"><span id="coverage-bar"></span></div>
+          <p id="coverage-text" class="muted small"></p>
+        </section>
+        <section class="card">
+          <h2>Inspection routines</h2>
+          <p class="muted small">Trigger a fresh review of one source</p>
+          <div id="routines" class="routines"></div>
+        </section>
+      </aside>
+    </div>
+
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <h2>Audit trail &amp; regulatory drift</h2>
+          <p class="muted small">Recent worker activity. In memory; resets on restart. Findings persist.</p>
+        </div>
+      </div>
+      <ol id="timeline" class="timeline"></ol>
+    </section>
+  </section>
+
+  <!-- ============ CONTEXT INGESTION (sources) ============ -->
+  <section class="view" id="view-sources" data-view="sources" hidden>
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">Context ingestion</p>
+        <h1>Source inventory</h1>
+        <p class="muted">Repositories and documents discovered by the worker. Only eligible text files on the default branch are reviewed.</p>
+      </div>
+    </div>
+    <div class="grid-main">
+      <section class="card"><div id="sources"></div></section>
+      <section class="card" id="source-detail"></section>
+    </div>
+  </section>
+
+  <!-- ============ AGENT AUDIT ============ -->
+  <section class="view" id="view-agent-audit" data-view="agent-audit" hidden>
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">Agent audit</p>
+        <h1>Agent orchestration</h1>
+        <p class="muted">Live pipeline stages, specialist agent status and the activity log.</p>
+      </div>
+    </div>
+
+    <section class="card">
+      <h2>Pipeline</h2>
+      <div id="pipeline" class="pipeline"></div>
+      <div class="meter"><span id="progress-bar"></span></div>
+      <p id="progress-text" class="muted small"></p>
+    </section>
+
+    <div class="grid-main">
+      <section class="card">
+        <h2>Specialist agents</h2>
+        <p class="muted small">Status in the current cycle. Demo mode uses built-in fixture rules, not external agents.</p>
+        <div id="agents" class="agent-list"></div>
+      </section>
+      <section class="card">
+        <h2>Agent activity log</h2>
+        <div id="events" class="log" role="log" aria-live="off"></div>
+      </section>
+    </div>
+
+    <section class="card" id="judge-panel">
+      <div class="card-head">
+        <div>
+          <h2>AI judge · Scan evaluation</h2>
+          <p class="muted small">Reference benchmark and evidence checks. Not a legal certification.</p>
+        </div>
+        <button id="judge-button" class="btn">Show evaluation for selected source</button>
+      </div>
+      <div id="judge-results" hidden></div>
+    </section>
+  </section>
+
+  <!-- ============ FINDINGS & REMEDIATION ============ -->
+  <section class="view" id="view-findings" data-view="findings" hidden>
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">Findings &amp; remediation</p>
+        <h1 id="heading">Findings</h1>
+        <p id="findings-meta" class="muted"></p>
+      </div>
+      <div class="page-actions">
+        <button id="verify" class="btn primary">✓ Rescan to verify fix</button>
+      </div>
+    </div>
+
+    <div class="toolbar">
+      <div class="chips" role="group" aria-label="Filter by status">
+        <button class="chip-btn" data-filter="ALL" aria-pressed="true">All</button>
+        <button class="chip-btn" data-filter="NON_COMPLIANT" aria-pressed="false">Non-compliant</button>
+        <button class="chip-btn" data-filter="NEEDS_CONTEXT" aria-pressed="false">Needs context</button>
+        <button class="chip-btn" data-filter="COMPLIANT_WITHIN_SCOPE" aria-pressed="false">Within scope</button>
+      </div>
+      <label class="severity">Severity
+        <select id="filter">
+          <option>ALL</option><option>CRITICAL</option><option>HIGH</option><option>MEDIUM</option><option>LOW</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="grid-findings">
+      <div id="findings-list" class="findings-list"></div>
+      <section class="card" id="finding-detail"></section>
+    </div>
+
+    <section class="card" id="coverage-card"></section>
+  </section>
+
+  <!-- ============ REGULATORY RULESETS ============ -->
+  <section class="view" id="view-rulesets" data-view="rulesets" hidden>
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">Regulatory rulesets</p>
+        <h1>Regulations cited</h1>
+        <p class="muted">Regulations referenced by current findings. Rules come from configured agents or demo fixtures. ReguLens ships no regulatory corpus.</p>
+      </div>
+    </div>
+
+    <section class="card">
+      <h2>Regulation summary</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Regulation</th><th>Authority</th><th>Non-compliant</th><th>Needs context</th><th>Within scope</th><th>Sources</th></tr></thead>
+          <tbody id="rules-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Statutory clause compliance mapping</h2>
+      <p class="muted small">Each finding mapped to its authority and clause. Follows the header search.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Authority</th><th>Statute &amp; clause</th><th>Source · location</th><th>Determination</th><th>Agent</th></tr></thead>
+          <tbody id="clauses-body"></tbody>
+        </table>
+      </div>
+    </section>
+  </section>
+
+  <!-- ============ AUDIT LEDGER ============ -->
+  <section class="view" id="view-ledger" data-view="ledger" hidden>
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">Audit ledger</p>
+        <h1>Alert outbox</h1>
+        <p class="muted">Non-compliant findings queue alerts for the approved notification relay. Relay acceptance is not delivery confirmation.</p>
+      </div>
+    </div>
+    <div id="ledger-kpis" class="kpis"></div>
+    <section class="card">
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Alert</th><th>Source</th><th>Finding</th><th>Severity</th><th>State</th><th>Updated</th><th>Owner</th></tr></thead>
+          <tbody id="alerts-body"></tbody>
+        </table>
+      </div>
+      <p class="muted small">Alerts omit raw evidence, but agent-generated text may still contain sensitive information. Route through an approved relay with DLP.</p>
+    </section>
+  </section>
+
+  <!-- ============ SETTINGS ============ -->
+  <section class="view" id="view-settings" data-view="settings" hidden>
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">Settings</p>
+        <h1>Run configuration</h1>
+        <p class="muted">Read-only. Change configuration in .env and restart the server.</p>
+      </div>
+    </div>
+    <div class="grid-main">
+      <section class="card">
+        <h2>Current run</h2>
+        <dl id="config" class="defs"></dl>
+      </section>
+      <section class="card">
+        <h2>API credentials</h2>
+        <p class="muted small">Tokens are read from the server's .env file and are never displayed in this interface.</p>
+        <h2 class="section-title">Governance</h2>
+        <ul class="plain">
+          <li>Local single-user prototype. Bind to loopback. No authentication or tenant isolation.</li>
+          <li>No automatic writes to GitHub or GitLab. No code is modified.</li>
+          <li>Agent output is untrusted and displayed as text.</li>
+          <li>No certification. Absence of a finding is not proof of compliance or of a fix.</li>
+        </ul>
+      </section>
+    </div>
+  </section>
+</main>
+
+<!-- AI assistant -->
+<button id="chat-toggle" class="chat-toggle" aria-controls="chat" aria-expanded="false">✦ AI assistant</button>
+<section id="chat" class="chat card" hidden>
+  <div class="chat-head">
+    <h2>ReguLens assistant</h2>
+    <button id="close" class="icon-btn" aria-label="Close assistant">×</button>
+  </div>
+  <div id="messages" class="messages" role="log" aria-live="polite"></div>
+  <form id="chat-form" class="chat-form">
+    <label for="prompt" class="muted small">Ask about the selected source</label>
+    <div class="row">
+      <input id="prompt" maxlength="300" placeholder="rescan, verify fix or status" required>
+      <button class="btn primary">Send</button>
+    </div>
+  </form>
+  <button id="rescan" class="btn">⟳ Rescan selected source</button>
+  <small class="muted">Supported commands: rescan, verify fix, status. No code is modified.</small>
+</section>
+
+</body>
+</html>
