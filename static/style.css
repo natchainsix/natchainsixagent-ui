@@ -61,6 +61,9 @@ input:focus,select:focus{outline:none;border-color:var(--primary)}
 .chip.risk{color:var(--risk-hi);border-color:rgba(229,115,115,.4)}
 .chip.violet{color:var(--primary-hi);border-color:rgba(147,102,240,.45)}
 .chip.ok{color:var(--ok-hi)}
+.model-chip{padding:2px 6px 2px 10px;gap:6px}
+.model-chip select{background:transparent;border:0;padding:3px 4px;font:12px var(--mono);color:var(--primary-hi);max-width:210px}
+.model-chip select option{background:var(--side);color:var(--text)}
 .search{display:flex;align-items:center;gap:8px;background:var(--side);border:1px solid var(--line);border-radius:10px;padding:6px 10px;width:min(340px,32vw);color:var(--muted)}
 .search:focus-within{border-color:var(--primary)}
 .search input{background:transparent;border:0;padding:0;flex:1;min-width:0;outline:none}

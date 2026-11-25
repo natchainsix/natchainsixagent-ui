@@ -22,6 +22,8 @@ const PHASE_TONE = { error: 'risk', review: 'violet', persist: 'ok' };
 
 let data = null;
 let backendHealth = null;
+let backendModels = [];
+let selectedModel = '';
 let selected = null;
 let selectedKey = null;
 let view = 'cockpit';
@@ -579,11 +581,52 @@ async function api(url, opts = {}) {
 }
 
 let healthTick = 0;
+let modelsLoaded = false;
+
+function renderModelPicker() {
+  const wrap = $('model-picker-wrap');
+  const sel = $('model-select');
+  if (!wrap || !sel) return;
+  if (!data?.compliance_api_configured || !backendModels.length) {
+    wrap.hidden = true;
+    return;
+  }
+  wrap.hidden = false;
+  const currentIds = [...sel.options].map(o => o.value).join('|');
+  const nextIds = backendModels.map(m => m.id).join('|');
+  if (currentIds !== nextIds) {
+    sel.replaceChildren(...backendModels.map(m => {
+      const opt = el('option', m.name || m.id);
+      opt.value = m.id;
+      return opt;
+    }));
+  }
+  if (selectedModel && sel.value !== selectedModel) sel.value = selectedModel;
+}
+
+async function loadBackendModels() {
+  try {
+    const res = await api('/api/backend/models');
+    backendModels = res.models || [];
+    selectedModel = res.selected_model || res.default_model || (backendModels[0]?.id ?? '');
+    modelsLoaded = true;
+    renderModelPicker();
+  } catch {}
+}
+
 async function refresh() {
   try {
     data = await api('/api/status');
-    if (data.compliance_api_configured && (!backendHealth || healthTick % 10 === 0)) {
-      api('/api/backend/health').then(h => { backendHealth = h; render(); }).catch(() => {});
+    if (data.compliance_api_configured) {
+      if (!modelsLoaded) loadBackendModels();
+      if (!backendHealth || healthTick % 10 === 0) {
+        api('/api/backend/health').then(h => {
+          backendHealth = h;
+          if (h.model_name && !selectedModel) selectedModel = h.model_name;
+          renderModelPicker();
+          render();
+        }).catch(() => {});
+      }
     }
     healthTick++;
     render();
@@ -617,10 +660,11 @@ async function runBackendTarget(payload, labelText) {
   if (artEl) artEl.replaceChildren();
   say('Starting live backend review: ' + labelText);
   try {
+    const runPayload = selectedModel && !payload.model_name ? { ...payload, model_name: selectedModel } : payload;
     const run = await api('/api/backend/runs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(runPayload),
     });
     const msg = `Run ${run.run_id} (${run.status}) · ${labelText}`;
     if (statusEl) statusEl.textContent = msg;
@@ -721,7 +765,7 @@ async function rescan(repo) {
     const { job } = await api('/api/rescan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ repository: repo }),
+      body: JSON.stringify(selectedModel ? { repository: repo, model_name: selectedModel } : { repository: repo }),
     });
     let last = '';
     for (let i = 0; i < 600; i++) {
@@ -766,6 +810,25 @@ document.addEventListener('keydown', e => {
 });
 $('search').addEventListener('input', e => { query = e.target.value; render(); });
 $('filter').addEventListener('change', e => { severityFilter = e.target.value; render(); });
+if ($('model-select')) {
+  $('model-select').addEventListener('change', async e => {
+    const chosen = e.target.value;
+    selectedModel = chosen;
+    try {
+      const res = await api('/api/backend/models/select', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model_name: chosen }),
+      });
+      selectedModel = res.selected_model || chosen;
+      if (backendHealth) backendHealth.model_name = selectedModel;
+      say('Switched compliance model to ' + selectedModel);
+      render();
+    } catch (err) {
+      say('Failed to switch model: ' + err.message);
+    }
+  });
+}
 document.querySelectorAll('[data-filter]').forEach(b => {
   b.addEventListener('click', () => { statusFilter = b.dataset.filter; render(); });
 });

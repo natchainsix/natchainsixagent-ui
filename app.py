@@ -21,6 +21,7 @@ COMPLIANCE_API_URL=os.getenv('COMPLIANCE_API_URL','').rstrip('/')
 DB=ROOT/'state.sqlite3'
 WAKE=asyncio.Event()
 FORCE=set()
+FORCE_MODEL={}
 META={}
 JOBS={}
 ACTIVE_JOBS={}
@@ -213,10 +214,12 @@ async def _cycle_backend(client,discovered):
         try:
             job=ACTIVE_JOBS.pop(repo,None)
             force=repo in FORCE; FORCE.discard(repo)
+            forced_model=FORCE_MODEL.pop(repo,None)
             if force:
                 activity('review',f'Triggering live backend review for {repo}',current_repo=repo,agents={'fca_compliance':'running'})
                 if job: JOBS[job].update(status='running',message=f'Running live FCA/CCA review of {repo} on backend')
                 run_payload={'mode':'pr_review','pr_url':meta['url'],'post_to_github':False} if meta.get('kind')=='pr' else {'mode':'codebase_review','repo_url':meta['url'],'branch':meta.get('branch','main'),'create_pr':False}
+                if forced_model: run_payload['model_name']=forced_model
                 start=await client.post(_validated_backend_url('/api/runs'),json=run_payload,headers=headers); start.raise_for_status()
                 run_id=start.json()['run_id']
                 run_res={}
@@ -372,6 +375,16 @@ async def _proxy_backend(method:str,path:str,*,params:dict|None=None,json_body:d
 async def backend_health():
     return await _proxy_backend('GET','/health')
 
+@app.get('/api/backend/models')
+async def backend_models():
+    return await _proxy_backend('GET','/api/models')
+
+@app.post('/api/backend/models/select')
+async def backend_select_model(request:Request):
+    if request.headers.get('origin') != str(request.base_url).rstrip('/'): raise HTTPException(403,'Same-origin request required')
+    body=await request.json()
+    return await _proxy_backend('POST','/api/models/select',json_body=body)
+
 @app.get('/api/backend/targets')
 async def backend_targets(org:str|None=None,include_prs:bool=True,pr_state:str='open'):
     params={'include_prs':str(include_prs).lower(),'pr_state':pr_state}
@@ -442,6 +455,8 @@ async def rescan(request:Request):
             if JOBS[key]['status'] in {'completed','failed'}: del JOBS[key]; break
         else: raise HTTPException(429,'Queue full')
     import uuid
+    model_name=body.get('model_name')
+    if isinstance(model_name,str) and model_name.strip(): FORCE_MODEL[repo]=model_name.strip()
     job=uuid.uuid4().hex; JOBS[job]={'status':'queued','message':'Rescan queued','repository':repo}; ACTIVE_JOBS[repo]=job; FORCE.add(repo); WAKE.set(); return {'job':job}
 @app.get('/api/rescan/{job}')
 async def job_status(job:str):
