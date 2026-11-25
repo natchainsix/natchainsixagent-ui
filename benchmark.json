@@ -1,0 +1,42 @@
+{
+  "safelend": {
+    "fingerprint": "f152121dcc3d9417c3173269212f709807b3ee06f7731c13ed0ce4cc9a821a56",
+    "controls": [
+      "customer_service.py",
+      "audit_logger.py",
+      "affordability.py",
+      "retention_policy.py",
+      "disclosures.py",
+      "enforcement.py"
+    ],
+    "positive_paths": []
+  },
+  "quicklend": {
+    "fingerprint": "0104f18cd15050df0c10b1aa3295e686adbbde1d9d5c6330d7d14acc471d2917",
+    "controls": [
+      "customer_service.py",
+      "audit_logger.py",
+      "affordability.py",
+      "retention_policy.py",
+      "disclosures.py",
+      "enforcement.py"
+    ],
+    "positive_paths": [
+      "customer_service.py",
+      "audit_logger.py",
+      "affordability.py",
+      "retention_policy.py",
+      "disclosures.py",
+      "enforcement.py"
+    ]
+  },
+  "lending-docs": {
+    "fingerprint": "346fc4b92ceb00a99c63af1a2330cbca4acd3fccfff7725e472b8a0d8389191e",
+    "controls": [
+      "policy.md"
+    ],
+    "positive_paths": [
+      "policy.md"
+    ]
+  }
+}
