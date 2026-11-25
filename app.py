@@ -4,7 +4,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 import httpx
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 from agents import review
@@ -21,6 +21,7 @@ COMPLIANCE_API_URL=os.getenv('COMPLIANCE_API_URL','').rstrip('/')
 DB=ROOT/'state.sqlite3'
 WAKE=asyncio.Event()
 FORCE=set()
+FORCE_MODEL={}
 META={}
 JOBS={}
 ACTIVE_JOBS={}
@@ -213,17 +214,30 @@ async def _cycle_backend(client,discovered):
         try:
             job=ACTIVE_JOBS.pop(repo,None)
             force=repo in FORCE; FORCE.discard(repo)
+            forced_model=FORCE_MODEL.pop(repo,None)
             if force:
                 activity('review',f'Triggering live backend review for {repo}',current_repo=repo,agents={'fca_compliance':'running'})
                 if job: JOBS[job].update(status='running',message=f'Running live FCA/CCA review of {repo} on backend')
                 run_payload={'mode':'pr_review','pr_url':meta['url'],'post_to_github':False} if meta.get('kind')=='pr' else {'mode':'codebase_review','repo_url':meta['url'],'branch':meta.get('branch','main'),'create_pr':False}
+                if forced_model: run_payload['model_name']=forced_model
                 start=await client.post(_validated_backend_url('/api/runs'),json=run_payload,headers=headers); start.raise_for_status()
                 run_id=start.json()['run_id']
                 run_res={}
-                for _ in range(max(60,int(AGENT_TIMEOUT/1.5))):
-                    await asyncio.sleep(1.5)
+                seen_seq=0
+                stage_to_phase={'inbound':'snapshot','triage':'review','analyze':'review','synthesize':'review','review_gate':'review','outbound':'persist','completed':'persist','failed':'error'}
+                for _ in range(max(120,int(AGENT_TIMEOUT/1.0))):
+                    await asyncio.sleep(1.0)
                     poll=await client.get(_validated_backend_url(f'/api/runs/{run_id}'),headers=headers); poll.raise_for_status()
                     run_res=poll.json()
+                    for evt in run_res.get('events') or []:
+                        seq=int(evt.get('seq') or 0)
+                        if seq<=seen_seq: continue
+                        seen_seq=seq
+                        phase=stage_to_phase.get(evt.get('stage'),'review')
+                        msg=str(evt.get('message') or '')
+                        if msg:
+                            activity(phase,f'{repo}: {msg}',current_repo=repo)
+                            if job: JOBS[job].update(status='running',message=msg,events=(run_res.get('events') or [])[-30:])
                     if run_res.get('status') in {'completed','failed'}: break
                 if run_res.get('status')!='completed' or not run_res.get('findings_report'):
                     raise RuntimeError(run_res.get('error') or 'Backend review did not complete')
@@ -361,6 +375,16 @@ async def _proxy_backend(method:str,path:str,*,params:dict|None=None,json_body:d
 async def backend_health():
     return await _proxy_backend('GET','/health')
 
+@app.get('/api/backend/models')
+async def backend_models():
+    return await _proxy_backend('GET','/api/models')
+
+@app.post('/api/backend/models/select')
+async def backend_select_model(request:Request):
+    if request.headers.get('origin') != str(request.base_url).rstrip('/'): raise HTTPException(403,'Same-origin request required')
+    body=await request.json()
+    return await _proxy_backend('POST','/api/models/select',json_body=body)
+
 @app.get('/api/backend/targets')
 async def backend_targets(org:str|None=None,include_prs:bool=True,pr_state:str='open'):
     params={'include_prs':str(include_prs).lower(),'pr_state':pr_state}
@@ -394,6 +418,20 @@ async def backend_list_runs(limit:int=30):
 async def backend_get_run(run_id:str):
     if not re.fullmatch(r'[A-Za-z0-9_-]{1,80}',run_id): raise HTTPException(400,'Invalid run ID')
     return await _proxy_backend('GET',f'/api/runs/{run_id}')
+
+@app.get('/api/backend/runs/{run_id}/events')
+async def backend_stream_run_events(run_id:str):
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,80}',run_id): raise HTTPException(400,'Invalid run ID')
+    url=_validated_backend_url(f'/api/runs/{run_id}/events')
+    token=os.getenv('AGENT_TOKEN','')
+    headers={'Authorization':'Bearer '+token} if token else {}
+    async def relay():
+        async with httpx.AsyncClient(timeout=httpx.Timeout(AGENT_TIMEOUT+30,connect=10),follow_redirects=False) as client:
+            async with client.stream('GET',url,headers=headers) as r:
+                r.raise_for_status()
+                async for chunk in r.aiter_bytes():
+                    yield chunk
+    return StreamingResponse(relay(),media_type='text/event-stream',headers={'Cache-Control':'no-cache','X-Accel-Buffering':'no'})
 @app.post('/webhooks/github')
 async def webhook(request:Request):
     secret=os.getenv('GITHUB_WEBHOOK_SECRET','')
@@ -417,6 +455,8 @@ async def rescan(request:Request):
             if JOBS[key]['status'] in {'completed','failed'}: del JOBS[key]; break
         else: raise HTTPException(429,'Queue full')
     import uuid
+    model_name=body.get('model_name')
+    if isinstance(model_name,str) and model_name.strip(): FORCE_MODEL[repo]=model_name.strip()
     job=uuid.uuid4().hex; JOBS[job]={'status':'queued','message':'Rescan queued','repository':repo}; ACTIVE_JOBS[repo]=job; FORCE.add(repo); WAKE.set(); return {'job':job}
 @app.get('/api/rescan/{job}')
 async def job_status(job:str):
