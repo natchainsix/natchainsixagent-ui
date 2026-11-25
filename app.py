@@ -187,6 +187,16 @@ def _match_backend_target(target_id:str,repo_key:str,meta:dict)->bool:
     url=(meta.get('url') or '').rstrip('/').lower()
     return tid==repo_key.lower() or (bool(url) and tid==url)
 
+def _store_backend_scan(repo:str,sha:str,result:dict,meta:dict):
+    now=time.time()
+    with connect() as c:
+        c.execute('INSERT OR REPLACE INTO scans VALUES(?,?,?,?)',(repo,sha,json.dumps(result),now))
+        for f in result.get('findings') or []:
+            if f.get('status')!='NON_COMPLIANT': continue
+            key=hashlib.sha256(json.dumps([repo,sha,f['file'],f['line_start'],f['title']],ensure_ascii=False).encode()).hexdigest()
+            body={'repository':repo,'commit':sha,'finding':{k:v for k,v in f.items() if k!='evidence'},'source':result.get('source'),'owner':meta.get('owner'),'recipient':meta.get('email')}
+            c.execute('INSERT OR IGNORE INTO alerts VALUES(?,?,?,?,?)',(key,repo,json.dumps(body),'pending',now))
+
 async def _cycle_backend(client,discovered):
     errors=[]
     token=os.getenv('AGENT_TOKEN','')
@@ -220,8 +230,7 @@ async def _cycle_backend(client,discovered):
                 sha,result=_backend_report_to_scan(run_res['findings_report'])
                 STATE['agents']['fca_compliance']='completed'
                 activity('persist',f'Recorded {len(result["findings"])} findings for {repo}')
-                with connect() as c:
-                    c.execute('INSERT OR REPLACE INTO scans VALUES(?,?,?,?)',(repo,sha,json.dumps(result),time.time()))
+                _store_backend_scan(repo,sha,result,meta)
                 if job: JOBS[job].update(status='completed',message=f'Rescan complete: {sum(f["status"]=="NON_COMPLIANT" for f in result["findings"])} risk signals remain.',commit=sha)
             else:
                 match=next((rep for rep in reports_cache if _match_backend_target(rep.get('target_id',''),repo,meta)),None)
@@ -232,8 +241,7 @@ async def _cycle_backend(client,discovered):
                     if not old or old['sha']!=rep_id:
                         full=await client.get(_validated_backend_url(f'/api/reports/{rep_id}'),headers=headers); full.raise_for_status()
                         sha,result=_backend_report_to_scan(full.json()['report'])
-                        with connect() as c:
-                            c.execute('INSERT OR REPLACE INTO scans VALUES(?,?,?,?)',(repo,sha,json.dumps(result),time.time()))
+                        _store_backend_scan(repo,sha,result,meta)
                         activity('persist',f'Synced backend report {rep_id} for {repo}')
         except Exception as exc:
             STATE['agents']['fca_compliance']='failed'
