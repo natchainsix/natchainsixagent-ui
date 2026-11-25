@@ -228,6 +228,7 @@ td .muted{font-size:12px}
 .run-artifacts{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
 .run-artifacts a{color:var(--primary-hi);font:12px var(--mono);text-decoration:none;border:1px solid rgba(147,102,240,.4);padding:4px 9px;border-radius:8px;background:rgba(147,102,240,.12)}
 .run-artifacts a:hover{background:rgba(147,102,240,.24)}
+.run-log{max-height:180px;margin:8px 0;padding:10px 12px;background:#110b1d;border:1px solid var(--line);border-radius:10px}
 #audit-backend-health:not(:empty){margin-bottom:10px}
 
 /* ---------- Responsive ---------- */

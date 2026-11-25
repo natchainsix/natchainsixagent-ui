@@ -601,8 +601,19 @@ async function runBackendTarget(payload, labelText) {
   busy = true;
   render();
   const statusEl = $('backend-run-status');
+  const logEl = $('backend-run-log');
   const artEl = $('backend-run-artifacts');
+  const appendRunLog = (stage, message, ts) => {
+    if (!logEl) return;
+    logEl.hidden = false;
+    const row = el('div', '', 'log-row');
+    const whenStr = new Date((ts || Date.now() / 1000) * 1000).toLocaleTimeString();
+    row.append(el('time', whenStr), el('span', `[${stage}] ${message}`));
+    logEl.append(row);
+    logEl.scrollTop = logEl.scrollHeight;
+  };
   if (statusEl) statusEl.textContent = 'Starting live review: ' + labelText + '…';
+  if (logEl) { logEl.replaceChildren(); logEl.hidden = false; }
   if (artEl) artEl.replaceChildren();
   say('Starting live backend review: ' + labelText);
   try {
@@ -614,37 +625,74 @@ async function runBackendTarget(payload, labelText) {
     const msg = `Run ${run.run_id} (${run.status}) · ${labelText}`;
     if (statusEl) statusEl.textContent = msg;
     say(msg);
-    for (let i = 0; i < 600; i++) {
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      const cur = await api('/api/backend/runs/' + encodeURIComponent(run.run_id));
-      if (statusEl) statusEl.textContent = `Run ${cur.run_id} (${cur.status}) · ${labelText}`;
+
+    const applyDone = async cur => {
       if (cur.status === 'failed') {
         const err = `Run ${cur.run_id} failed: ${cur.error || 'Unknown error'}`;
         if (statusEl) statusEl.textContent = err;
         say(err);
-        break;
+        return;
       }
-      if (cur.status === 'completed') {
-        const rep = cur.findings_report;
-        const deliv = cur.deliverable_result;
-        const doneMsg = rep
-          ? `Completed ${cur.run_id}: ${rep.overall_verdict} (${(rep.findings || []).length} finding(s))`
-          : `Completed ${cur.run_id}`;
-        if (statusEl) statusEl.textContent = deliv?.summary ? `${doneMsg} · ${deliv.summary}` : doneMsg;
-        say(deliv?.summary ? `${doneMsg}\n${deliv.summary}` : doneMsg);
-        if (artEl && (deliv?.artifacts || []).length) {
-          for (const a of deliv.artifacts) {
-            if (/^https?:\/\//i.test(a)) {
-              const link = el('a', a);
-              link.href = a;
-              link.target = '_blank';
-              link.rel = 'noopener noreferrer';
-              artEl.append(link);
-            }
+      const rep = cur.findings_report;
+      const deliv = cur.deliverable_result;
+      const doneMsg = rep
+        ? `Completed ${cur.run_id}: ${rep.overall_verdict} (${(rep.findings || []).length} finding(s))`
+        : `Completed ${cur.run_id}`;
+      if (statusEl) statusEl.textContent = deliv?.summary ? `${doneMsg} · ${deliv.summary}` : doneMsg;
+      say(deliv?.summary ? `${doneMsg}\n${deliv.summary}` : doneMsg);
+      if (artEl && (deliv?.artifacts || []).length) {
+        for (const a of deliv.artifacts) {
+          if (/^https?:\/\//i.test(a)) {
+            const link = el('a', a);
+            link.href = a;
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            artEl.append(link);
           }
         }
-        data = await api('/api/status');
-        break;
+      }
+      data = await api('/api/status');
+    };
+
+    const seenSeq = new Set();
+    const recordEvent = evt => {
+      if (!evt || seenSeq.has(evt.seq)) return;
+      seenSeq.add(evt.seq);
+      appendRunLog(evt.stage || 'agent', evt.message || '', evt.time);
+      if (statusEl) statusEl.textContent = `[${evt.stage || 'agent'}] ${evt.message || ''}`;
+      $('header-status').textContent = `${evt.stage || 'agent'} · ${(evt.message || '').slice(0, 60)}`;
+      $('header-status').className = 'chip violet';
+      say(`[${evt.stage || 'agent'}] ${evt.message || ''}`);
+    };
+
+    let finished = false;
+    if (typeof EventSource !== 'undefined') {
+      finished = await new Promise(resolve => {
+        const es = new EventSource('/api/backend/runs/' + encodeURIComponent(run.run_id) + '/events');
+        es.addEventListener('progress', e => {
+          try { recordEvent(JSON.parse(e.data)); } catch {}
+        });
+        es.addEventListener('done', async e => {
+          es.close();
+          try { await applyDone(JSON.parse(e.data)); } catch {}
+          resolve(true);
+        });
+        es.onerror = () => {
+          es.close();
+          resolve(false);
+        };
+      });
+    }
+
+    if (!finished) {
+      for (let i = 0; i < 600; i++) {
+        await new Promise(resolve => setTimeout(resolve, 1200));
+        const cur = await api('/api/backend/runs/' + encodeURIComponent(run.run_id));
+        for (const evt of cur.events || []) recordEvent(evt);
+        if (cur.status === 'completed' || cur.status === 'failed') {
+          await applyDone(cur);
+          break;
+        }
       }
     }
   } catch (e) {
