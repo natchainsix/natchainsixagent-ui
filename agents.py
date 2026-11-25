@@ -30,6 +30,9 @@ def validate(data,files,agent):
 
 async def review(client,repo,sha,files,mode,on_activity=lambda name,status:None):
     endpoints=json.loads(os.getenv('AGENTS_JSON','{}'))
+    backend_url=os.getenv('COMPLIANCE_API_URL','').rstrip('/')
+    if not endpoints and backend_url:
+        endpoints={'fca_compliance':{'url':backend_url+'/review','mode':'direct'}}
     if not endpoints:
         if mode!='demo': raise ValueError('Live mode requires configured agents')
         on_activity('Demo fixture rules','running')

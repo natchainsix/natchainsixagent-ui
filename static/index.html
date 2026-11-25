@@ -1,1 +1,28 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ReguLens | NatChain Six</title><link rel="stylesheet" href="/static/style.css"><script defer src="/static/app.js"></script></head><body><header><img src="/static/natwest.png" alt="NatWest"><span>ReguLens / NatChain Six</span><small>LangChain hackathon prototype</small></header><main><section class="hero"><div><p class="eyebrow">CONTINUOUS REGULATORY ASSURANCE</p><h1>Every source. Every change.</h1><p id="status" role="status">Connecting to agent worker…</p><small id="mode"></small></div><div id="radar" aria-hidden="true">AI</div></section><div id="metrics" class="metrics"></div><section class="panel"><h2>Agent orchestration</h2><div id="pipeline" class="pipeline"></div><progress id="progress" max="1" value="0"></progress><p id="agents"></p></section><div class="workspace"><aside class="panel"><h2>Source inventory</h2><div id="sources"></div></aside><section class="panel"><h2 id="heading">Findings</h2><div id="metadata"></div><label>Severity <select id="filter"><option>ALL</option><option>CRITICAL</option><option>HIGH</option><option>MEDIUM</option><option>LOW</option></select></label><div id="findings"></div></section></div><section class="panel" id="judge-panel"><h2>AI Judge · Scan evaluation</h2><p>Reference benchmark and evidence checks — not a legal certification.</p><button id="judge-button">Show evaluation for selected source</button><div id="judge-results" hidden></div></section><section class="panel"><h2>Live activity</h2><div id="events"></div></section></main><button id="chat-toggle" aria-controls="chat" aria-expanded="false">✦ AI assistant</button><section id="chat" class="chat panel" hidden><div class="chat-head"><h2>ReguLens assistant</h2><button id="close" aria-label="Close assistant">×</button></div><div id="messages" role="log" aria-live="polite"></div><form id="chat-form"><label for="prompt">Ask about the selected source</label><input id="prompt" maxlength="300" placeholder="Rescan and verify the fix" required><button>Send</button></form><button id="rescan">Rescan selected source</button><small>Supported commands: rescan, verify fix, status. No code is modified.</small></section></body></html>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ReguLens | NatChain Six</title><link rel="stylesheet" href="/static/style.css"><script defer src="/static/app.js"></script></head><body><header><img src="/static/natwest.png" alt="NatWest"><span>ReguLens / NatChain Six</span><small>LangChain hackathon prototype</small></header><main><section class="hero"><div><p class="eyebrow">CONTINUOUS REGULATORY ASSURANCE</p><h1>Every source. Every change.</h1><p id="status" role="status">Connecting to agent worker…</p><small id="mode"></small></div><div id="radar" aria-hidden="true">AI</div></section><div id="metrics" class="metrics"></div><section class="panel"><h2>Agent orchestration</h2><div id="pipeline" class="pipeline"></div><progress id="progress" max="1" value="0"></progress><p id="agents"></p></section><div class="workspace"><aside class="panel"><h2>Source inventory</h2><div id="sources"></div></aside><section class="panel"><h2 id="heading">Findings</h2><div id="metadata"></div><label>Severity <select id="filter"><option>ALL</option><option>CRITICAL</option><option>HIGH</option><option>MEDIUM</option><option>LOW</option></select></label><div id="findings"></div></section></div><section class="panel" id="backend-panel" hidden>
+<div class="backend-head">
+<h2>Live Compliance Agent · Repos, PRs &amp; Reports</h2>
+<div class="backend-actions">
+<span id="backend-health" class="muted">Checking compliance backend…</span>
+<button id="refresh-targets" type="button">Refresh targets</button>
+</div>
+</div>
+<div class="backend-grid">
+<div>
+<h3>Available GitHub Repos &amp; PRs</h3>
+<form id="custom-target-form" class="inline-form">
+<input id="custom-target-url" placeholder="https://github.com/owner/repo or .../pull/1" aria-label="GitHub repository or PR URL">
+<button type="submit">Run review</button>
+</form>
+<label class="checkbox-row"><input type="checkbox" id="backend-write-github"> Allow GitHub write (open remediation PR / post PR comment)</label>
+<div id="backend-targets" class="target-list"></div>
+</div>
+<div>
+<h3>Run Output &amp; Compliance Reports</h3>
+<div id="backend-run-status" class="muted">Select a repo or PR to run a real FCA Handbook &amp; Consumer Credit Act review.</div>
+<div id="backend-report-view"></div>
+<h3>Persisted Findings Reports</h3>
+<div id="backend-reports" class="report-list"></div>
+</div>
+</div>
+</section>
+<section class="panel" id="judge-panel"><h2>AI Judge · Scan evaluation</h2><p>Reference benchmark and evidence checks — not a legal certification.</p><button id="judge-button">Show evaluation for selected source</button><div id="judge-results" hidden></div></section><section class="panel"><h2>Live activity</h2><div id="events"></div></section></main><button id="chat-toggle" aria-controls="chat" aria-expanded="false">✦ AI assistant</button><section id="chat" class="chat panel" hidden><div class="chat-head"><h2>ReguLens assistant</h2><button id="close" aria-label="Close assistant">×</button></div><div id="messages" role="log" aria-live="polite"></div><form id="chat-form"><label for="prompt">Ask about the selected source</label><input id="prompt" maxlength="300" placeholder="Rescan and verify the fix" required><button>Send</button></form><button id="rescan">Rescan selected source</button><small>Supported commands: rescan, verify fix, status. No code is modified.</small></section></body></html>
