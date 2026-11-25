@@ -1,6 +1,7 @@
 import asyncio, hashlib, hmac, json, os, re, sqlite3, time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 import httpx
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import FileResponse
@@ -15,6 +16,8 @@ MODE=os.getenv('MODE','demo')
 ORG=os.getenv('GITHUB_ORG','')
 TOKEN=os.getenv('GITHUB_TOKEN','')
 INTERVAL=max(5,int(os.getenv('POLL_SECONDS','30')))
+AGENT_TIMEOUT=max(30,int(os.getenv('AGENT_TIMEOUT_SECONDS','300')))
+COMPLIANCE_API_URL=os.getenv('COMPLIANCE_API_URL','').rstrip('/')
 DB=ROOT/'state.sqlite3'
 WAKE=asyncio.Event()
 FORCE=set()
@@ -44,6 +47,26 @@ async def github(client,path,params=None):
     r=await client.get('https://api.github.com'+path,params=params,headers={'Authorization':f'Bearer {TOKEN}','Accept':'application/vnd.github+json'} if TOKEN else {'Accept':'application/vnd.github+json'}); r.raise_for_status(); return r.json()
 
 async def discover(client):
+    if MODE=='backend':
+        url=_validated_backend_url('/api/targets')
+        token=os.getenv('AGENT_TOKEN','')
+        headers={'Authorization':'Bearer '+token} if token else {}
+        r=await client.get(url,params={'include_prs':'true','pr_state':'open'},headers=headers); r.raise_for_status()
+        payload=r.json()
+        result=[]
+        for repo in payload.get('repositories') or []:
+            slug=repo.get('full_name') or ''
+            if not slug: continue
+            owner=slug.split('/')[0] if '/' in slug else (payload.get('org') or 'GitHub')
+            META[slug]={'provider':'GitHub','owner':owner,'email':None,'url':repo.get('url') or f'https://github.com/{slug}','branch':repo.get('default_branch') or 'main','kind':'repo'}
+            result.append((slug,META[slug]))
+            for pr in repo.get('pull_requests') or []:
+                pr_num=pr.get('number')
+                if pr_num is None: continue
+                key=f'{slug}#{pr_num}'
+                META[key]={'provider':'Pull Requests','owner':pr.get('author') or owner,'email':None,'url':pr.get('url') or f'https://github.com/{slug}/pull/{pr_num}','repo':slug,'pr_number':pr_num,'kind':'pr','title':pr.get('title') or f'PR #{pr_num}'}
+                result.append((key,META[key]))
+        return result
     if MODE=='demo':
         for name,provider in [('safelend','GitHub'),('quicklend','GitLab'),('lending-docs','Documentation')]:
             META[name]={'provider':provider,'owner':'NatChain Six (demo)','email':'owner@example.invalid'}
@@ -137,11 +160,100 @@ async def notify(client):
             with connect() as c: c.execute("UPDATE alerts SET state='sent' WHERE id=?",(row['id'],))
         except httpx.HTTPError: continue
 
+def _backend_report_to_scan(report:dict)->tuple[str,dict]:
+    status_map={'non_compliant':'NON_COMPLIANT','potential_breach':'NON_COMPLIANT','needs_review':'NEEDS_CONTEXT','observation':'COMPLIANT_WITHIN_SCOPE'}
+    sev_map={'critical':'CRITICAL','high':'HIGH','medium':'MEDIUM','low':'LOW','info':'LOW'}
+    findings=[]
+    for f in report.get('findings') or []:
+        loc=f.get('location') or {}
+        refs=[c.get('reference') for c in (*(f.get('fca_citations') or []), *(f.get('cca_citations') or [])) if isinstance(c,dict) and c.get('reference')]
+        findings.append({
+            'status':status_map.get(f.get('status'),'NON_COMPLIANT'),
+            'severity':sev_map.get(f.get('severity'),'MEDIUM'),
+            'title':f.get('title') or 'Compliance finding',
+            'file':loc.get('file_path') or loc.get('document_name') or loc.get('reference') or 'unknown',
+            'line_start':int(loc.get('start_line') or 1),
+            'regulation':', '.join(dict.fromkeys(refs)) or 'FCA Handbook / Consumer Credit Act 1974',
+            'evidence':(f.get('evidence_excerpt') or f.get('description') or '').strip()[:4000],
+            'remediation':(f.get('remediation_guidance') or f.get('description') or '').strip()[:4000],
+            'agent':'fca_compliance',
+        })
+    sha=str(report.get('report_id') or 'latest')
+    result={'findings':findings,'source':'LIVE FCA/CCA Compliance Agent','files_reviewed':int(report.get('units_triaged_in') or report.get('units_total') or 0),'skipped':[],'scope':'Backend FCA Handbook & CCA 1974 compliance pipeline','evaluation':None}
+    return sha,result
+
+def _match_backend_target(target_id:str,repo_key:str,meta:dict)->bool:
+    tid=(target_id or '').rstrip('/').lower()
+    url=(meta.get('url') or '').rstrip('/').lower()
+    return tid==repo_key.lower() or (bool(url) and tid==url)
+
+async def _cycle_backend(client,discovered):
+    errors=[]
+    token=os.getenv('AGENT_TOKEN','')
+    headers={'Authorization':'Bearer '+token} if token else {}
+    reports_cache=[]
+    try:
+        r=await client.get(_validated_backend_url('/api/findings'),params={'limit':100},headers=headers); r.raise_for_status()
+        f_data=r.json()
+        reports_cache=f_data.get('reports') or []
+    except Exception as exc:
+        errors.append('findings sync: '+type(exc).__name__)
+    for repo,meta in discovered:
+        job=None
+        try:
+            job=ACTIVE_JOBS.pop(repo,None)
+            force=repo in FORCE; FORCE.discard(repo)
+            if force:
+                activity('review',f'Triggering live backend review for {repo}',current_repo=repo,agents={'fca_compliance':'running'})
+                if job: JOBS[job].update(status='running',message=f'Running live FCA/CCA review of {repo} on backend')
+                run_payload={'mode':'pr_review','pr_url':meta['url'],'post_to_github':False} if meta.get('kind')=='pr' else {'mode':'codebase_review','repo_url':meta['url'],'branch':meta.get('branch','main'),'create_pr':False}
+                start=await client.post(_validated_backend_url('/api/runs'),json=run_payload,headers=headers); start.raise_for_status()
+                run_id=start.json()['run_id']
+                run_res={}
+                for _ in range(max(60,int(AGENT_TIMEOUT/1.5))):
+                    await asyncio.sleep(1.5)
+                    poll=await client.get(_validated_backend_url(f'/api/runs/{run_id}'),headers=headers); poll.raise_for_status()
+                    run_res=poll.json()
+                    if run_res.get('status') in {'completed','failed'}: break
+                if run_res.get('status')!='completed' or not run_res.get('findings_report'):
+                    raise RuntimeError(run_res.get('error') or 'Backend review did not complete')
+                sha,result=_backend_report_to_scan(run_res['findings_report'])
+                STATE['agents']['fca_compliance']='completed'
+                activity('persist',f'Recorded {len(result["findings"])} findings for {repo}')
+                with connect() as c:
+                    c.execute('INSERT OR REPLACE INTO scans VALUES(?,?,?,?)',(repo,sha,json.dumps(result),time.time()))
+                if job: JOBS[job].update(status='completed',message=f'Rescan complete: {sum(f["status"]=="NON_COMPLIANT" for f in result["findings"])} risk signals remain.',commit=sha)
+            else:
+                match=next((rep for rep in reports_cache if _match_backend_target(rep.get('target_id',''),repo,meta)),None)
+                if match:
+                    rep_id=match['report_id']
+                    with connect() as c:
+                        old=c.execute('SELECT sha FROM scans WHERE repo=?',(repo,)).fetchone()
+                    if not old or old['sha']!=rep_id:
+                        full=await client.get(_validated_backend_url(f'/api/reports/{rep_id}'),headers=headers); full.raise_for_status()
+                        sha,result=_backend_report_to_scan(full.json()['report'])
+                        with connect() as c:
+                            c.execute('INSERT OR REPLACE INTO scans VALUES(?,?,?,?)',(repo,sha,json.dumps(result),time.time()))
+                        activity('persist',f'Synced backend report {rep_id} for {repo}')
+        except Exception as exc:
+            STATE['agents']['fca_compliance']='failed'
+            if job: JOBS[job].update(status='failed',message='Review failed: '+str(exc)[:180])
+            errors.append(repo+': '+type(exc).__name__)
+            activity('error',errors[-1])
+        finally:
+            STATE['completed']+=1
+    return errors
+
 async def cycle(client):
     errors=[]
     activity("discovery", "Discovering authorised repositories", completed=0,total=0,current_repo=None,agents={})
     discovered=await discover(client)
     STATE.update(total=len(discovered),discovered=[r for r,_ in discovered])
+    if MODE=='backend':
+        errors=await _cycle_backend(client,discovered)
+        activity('notify','Checking notification queue',current_repo=None)
+        await notify(client); STATE['error']='; '.join(errors); STATE['last_cycle']=time.time()
+        return
     for repo,ref in discovered:
         job=None
         try:
@@ -175,7 +287,7 @@ async def cycle(client):
     await notify(client); STATE['error']='; '.join(errors); STATE['last_cycle']=time.time()
 
 async def worker():
-    async with httpx.AsyncClient(timeout=httpx.Timeout(90,connect=10),follow_redirects=False) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(AGENT_TIMEOUT,connect=10),follow_redirects=False) as client:
         while True:
             STATE['running']=True
             try: await cycle(client)
@@ -208,7 +320,72 @@ async def status():
         pending=c.execute("SELECT count(*) FROM alerts WHERE state='pending'").fetchone()[0]
         sent=c.execute("SELECT count(*) FROM alerts WHERE state='sent'").fetchone()[0]
         alerts=[{**dict(r),'body':json.loads(r['body'])} for r in c.execute('SELECT * FROM alerts ORDER BY updated DESC LIMIT 500')]
-    return {'metadata':META,'alerts':alerts,'relay_configured':bool(os.getenv('ALERT_WEBHOOK_URL')),'mode':MODE,**STATE,'repositories':scans,'pending_alerts':pending,'sent_alerts':sent,'poll_seconds':INTERVAL}
+    try:
+        agents_configured=bool(json.loads(os.getenv('AGENTS_JSON','{}')))
+    except json.JSONDecodeError:
+        agents_configured=False
+    backend_url=os.getenv('COMPLIANCE_API_URL',COMPLIANCE_API_URL).rstrip('/')
+    return {'metadata':META,'alerts':alerts,'relay_configured':bool(os.getenv('ALERT_WEBHOOK_URL')),'mode':MODE,'agents_configured':agents_configured,'compliance_api_configured':bool(backend_url),**STATE,'repositories':scans,'pending_alerts':pending,'sent_alerts':sent,'poll_seconds':INTERVAL}
+
+def _validated_backend_url(path:str)->str:
+    base=os.getenv('COMPLIANCE_API_URL',COMPLIANCE_API_URL).rstrip('/')
+    if not base: raise HTTPException(503,'COMPLIANCE_API_URL is not configured')
+    parsed=urlsplit(base)
+    if parsed.scheme!='https' and not (parsed.scheme=='http' and parsed.hostname in {'localhost','127.0.0.1','::1'}):
+        raise HTTPException(400,'COMPLIANCE_API_URL requires HTTPS or loopback')
+    return base+path
+
+async def _proxy_backend(method:str,path:str,*,params:dict|None=None,json_body:dict|None=None):
+    url=_validated_backend_url(path)
+    token=os.getenv('AGENT_TOKEN','')
+    headers={'Authorization':'Bearer '+token} if token else {}
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60,connect=10),follow_redirects=False) as client:
+            r=await client.request(method,url,params=params,json=json_body,headers=headers)
+    except httpx.HTTPError as exc:
+        raise HTTPException(502,f'Compliance backend unreachable: {type(exc).__name__}') from exc
+    if r.status_code>=400:
+        detail=r.text[:400] if r.text else f'Backend returned HTTP {r.status_code}'
+        raise HTTPException(r.status_code,detail)
+    return r.json()
+
+@app.get('/api/backend/health')
+async def backend_health():
+    return await _proxy_backend('GET','/health')
+
+@app.get('/api/backend/targets')
+async def backend_targets(org:str|None=None,include_prs:bool=True,pr_state:str='open'):
+    params={'include_prs':str(include_prs).lower(),'pr_state':pr_state}
+    if org: params['org']=org
+    return await _proxy_backend('GET','/api/targets',params=params)
+
+@app.get('/api/backend/findings')
+async def backend_findings(target_id:str|None=None,source_type:str|None=None,severity:str|None=None,limit:int=50):
+    params={'limit':limit}
+    if target_id: params['target_id']=target_id
+    if source_type: params['source_type']=source_type
+    if severity: params['severity']=severity
+    return await _proxy_backend('GET','/api/findings',params=params)
+
+@app.get('/api/backend/reports/{report_id}')
+async def backend_report(report_id:str):
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,80}',report_id): raise HTTPException(400,'Invalid report ID')
+    return await _proxy_backend('GET',f'/api/reports/{report_id}')
+
+@app.post('/api/backend/runs')
+async def backend_create_run(request:Request):
+    if request.headers.get('origin') != str(request.base_url).rstrip('/'): raise HTTPException(403,'Same-origin request required')
+    body=await request.json()
+    return await _proxy_backend('POST','/api/runs',json_body=body)
+
+@app.get('/api/backend/runs')
+async def backend_list_runs(limit:int=30):
+    return await _proxy_backend('GET','/api/runs',params={'limit':limit})
+
+@app.get('/api/backend/runs/{run_id}')
+async def backend_get_run(run_id:str):
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,80}',run_id): raise HTTPException(400,'Invalid run ID')
+    return await _proxy_backend('GET',f'/api/runs/{run_id}')
 @app.post('/webhooks/github')
 async def webhook(request:Request):
     secret=os.getenv('GITHUB_WEBHOOK_SECRET','')
