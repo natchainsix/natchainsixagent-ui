@@ -220,6 +220,16 @@ td .muted{font-size:12px}
 /* Settings */
 .defs .muted{font-size:12px}
 
+/* Backend runner */
+.custom-target-form{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:10px 0 8px}
+.custom-target-form input[type="text"],.custom-target-form input:not([type]){flex:1 1 320px;min-width:220px}
+.toggle-check{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--text-2);cursor:pointer;user-select:none}
+.toggle-check input{width:auto;accent-color:var(--primary)}
+.run-artifacts{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+.run-artifacts a{color:var(--primary-hi);font:12px var(--mono);text-decoration:none;border:1px solid rgba(147,102,240,.4);padding:4px 9px;border-radius:8px;background:rgba(147,102,240,.12)}
+.run-artifacts a:hover{background:rgba(147,102,240,.24)}
+#audit-backend-health:not(:empty){margin-bottom:10px}
+
 /* ---------- Responsive ---------- */
 @media (max-width:1100px){
   .grid-main,.grid-findings{grid-template-columns:1fr}

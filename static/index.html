@@ -140,9 +140,25 @@
       <div>
         <p class="eyebrow">Context ingestion</p>
         <h1>Source inventory</h1>
-        <p class="muted">Repositories and documents discovered by the worker. Only eligible text files on the default branch are reviewed.</p>
+        <p class="muted">Repositories and pull requests discovered by the compliance backend. Trigger an on-demand scan or remediation PR below.</p>
       </div>
     </div>
+    <section class="card" id="backend-runner-card" hidden>
+      <div class="card-head">
+        <div>
+          <h2>Run on-demand GitHub compliance review</h2>
+          <p class="muted small">Scan any repository or pull request via the real FCA Handbook &amp; Consumer Credit Act agent</p>
+        </div>
+        <div id="sources-health" class="chips"></div>
+      </div>
+      <form id="custom-target-form" class="custom-target-form">
+        <input id="custom-target-url" placeholder="https://github.com/owner/repo or https://github.com/owner/repo/pull/1" aria-label="GitHub repository or pull request URL">
+        <label class="toggle-check"><input type="checkbox" id="backend-write-github"> Open remediation PR / post PR comment</label>
+        <button type="submit" class="btn primary" id="custom-target-submit">▶ Run review</button>
+      </form>
+      <p id="backend-run-status" class="muted small"></p>
+      <div id="backend-run-artifacts" class="run-artifacts"></div>
+    </section>
     <div class="grid-main">
       <section class="card"><div id="sources"></div></section>
       <section class="card" id="source-detail"></section>
@@ -168,8 +184,9 @@
 
     <div class="grid-main">
       <section class="card">
-        <h2>Specialist agents</h2>
-        <p class="muted small">Status in the current cycle. Demo mode uses built-in fixture rules, not external agents.</p>
+        <h2>Specialist agents &amp; regulatory MCPs</h2>
+        <p class="muted small">Live backend connectivity and agent status in the current cycle.</p>
+        <div id="audit-backend-health" class="agent-list"></div>
         <div id="agents" class="agent-list"></div>
       </section>
       <section class="card">

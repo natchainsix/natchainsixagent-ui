@@ -21,6 +21,7 @@ const STATUS = {
 const PHASE_TONE = { error: 'risk', review: 'violet', persist: 'ok' };
 
 let data = null;
+let backendHealth = null;
 let selected = null;
 let selectedKey = null;
 let view = 'cockpit';
@@ -118,7 +119,7 @@ function render() {
 }
 
 function renderChrome() {
-  const live = data.mode !== 'demo';
+  const live = data.mode !== 'demo' || data.agents_configured || data.compliance_api_configured;
   const text = data.error ? 'Worker warning: ' + data.error
     : data.running ? `${data.phase} · ${data.current_repo || 'Background worker'}`
     : 'Monitoring for changes';
@@ -127,7 +128,10 @@ function renderChrome() {
   $('header-status').className = 'chip ' + (data.error ? 'risk' : data.running ? 'violet' : 'ok');
   $('mode-pill').textContent = live ? 'LIVE' : 'DEMO';
   $('mode-pill').className = 'pill ' + (live ? 'ok' : 'warn');
-  $('mode-note').textContent = live ? 'LIVE · configured agent endpoints' : 'DEMO · synthetic checks and simulated providers';
+  $('mode-note').textContent = data.compliance_api_configured
+    ? 'LIVE · Real FCA Handbook RAG & Consumer Credit Act Compliance Agent'
+    : live ? 'LIVE · configured agent endpoints'
+    : 'DEMO · synthetic checks and simulated providers';
   $('selected-name').textContent = selected ?? 'None';
   $('warning').hidden = !data.error;
   $('warning').textContent = data.error ? 'Worker warning: ' + data.error : '';
@@ -135,6 +139,7 @@ function renderChrome() {
   bell.hidden = !data.pending_alerts;
   bell.textContent = String(data.pending_alerts);
   for (const id of ['cockpit-rescan', 'verify', 'rescan']) $(id).disabled = busy || !selected;
+  if ($('custom-target-submit')) $('custom-target-submit').disabled = busy;
 }
 
 function renderCockpit() {
@@ -217,6 +222,18 @@ function renderCockpit() {
 }
 
 function renderSources() {
+  const runnerCard = $('backend-runner-card');
+  if (runnerCard) {
+    runnerCard.hidden = !data.compliance_api_configured;
+    if (data.compliance_api_configured && backendHealth && $('sources-health')) {
+      $('sources-health').replaceChildren(
+        pill('FCA MCP ' + (backendHealth.fca_mcp_reachable ? 'UP' : 'DOWN'), backendHealth.fca_mcp_reachable ? 'ok' : 'risk'),
+        pill('CCA MCP ' + (backendHealth.cca_mcp_reachable ? 'UP' : 'DOWN'), backendHealth.cca_mcp_reachable ? 'ok' : 'risk'),
+        pill(backendHealth.model_name || 'LLM', 'violet'),
+      );
+    }
+  }
+
   const groups = new Map();
   for (const name of names()) {
     const p = metaOf(name).provider ?? 'Other';
@@ -250,6 +267,8 @@ function renderSources() {
   box.append(el('h2', selected), el('p', `${m.provider ?? 'Unknown provider'} · ${m.owner ?? 'Unknown owner'}`, 'muted small'));
   const dl = el('dl', '', 'defs');
   addDef(dl, 'Owner', m.owner ?? 'Unknown');
+  if (m.url) addDef(dl, 'URL', m.url);
+  if (m.branch) addDef(dl, 'Branch', m.branch);
   addDef(dl, 'Email', m.email || 'Not configured; relay routing required');
   addDef(dl, 'Revision', r ? shortSha(r.sha) : 'Not reviewed yet');
   addDef(dl, 'Last reviewed', r ? when(r.updated) : '—');
@@ -262,8 +281,21 @@ function renderSources() {
   rescanBtn.onclick = () => rescan(selected);
   const openBtn = el('button', 'Open findings', 'btn');
   openBtn.onclick = () => { location.hash = '#findings'; };
-  box.append(el('div', '', 'row'));
-  box.lastChild.append(rescanBtn, openBtn);
+  const row = el('div', '', 'row');
+  row.append(rescanBtn, openBtn);
+  if (data.compliance_api_configured && m.url) {
+    const isPr = m.kind === 'pr';
+    const writeBtn = el('button', isPr ? '⚡ Review & Comment PR' : '⚡ Scan & Open Fix PR', 'btn');
+    writeBtn.disabled = busy;
+    writeBtn.onclick = () => runBackendTarget(
+      isPr
+        ? { mode: 'pr_review', pr_url: m.url, post_to_github: true }
+        : { mode: 'codebase_review', repo_url: m.url, branch: m.branch || 'main', create_pr: true },
+      selected,
+    );
+    row.append(writeBtn);
+  }
+  box.append(row);
   if (r?.result.skipped.length) {
     box.append(el('h3', 'Coverage limitations'), el('pre', r.result.skipped.join('\n')));
   }
@@ -280,6 +312,25 @@ function renderAgentAudit() {
   const pct = total ? Math.min(100, Math.round((data.completed / total) * 100)) : 0;
   $('progress-bar').style.width = pct + '%';
   $('progress-text').textContent = `${data.completed} of ${total} sources processed this cycle · polling every ${data.poll_seconds}s · last cycle ${data.last_cycle ? when(data.last_cycle) : 'not finished yet'}`;
+
+  const healthBox = $('audit-backend-health');
+  if (healthBox) {
+    if (backendHealth) {
+      const mkRow = (title, ok, detail) => {
+        const row = el('div', '', 'agent-row');
+        const info = el('div');
+        info.append(el('span', title, 'cell-title'), el('span', detail, 'muted small'));
+        row.append(info, pill(ok ? 'connected' : 'unreachable', ok ? 'ok' : 'risk'));
+        return row;
+      };
+      healthBox.replaceChildren(
+        mkRow('FCA Handbook RAG MCP', backendHealth.fca_mcp_reachable, backendHealth.fca_mcp_url || ''),
+        mkRow('Consumer Credit Act 1974 MCP', backendHealth.cca_mcp_reachable, backendHealth.cca_mcp_url || ''),
+      );
+    } else {
+      healthBox.replaceChildren();
+    }
+  }
 
   const agents = Object.entries(data.agents ?? {});
   $('agents').replaceChildren(...(agents.length ? agents.map(([name, status]) => {
@@ -462,11 +513,18 @@ function renderLedger() {
 function renderSettings() {
   const dl = $('config');
   dl.replaceChildren();
-  addDef(dl, 'Mode', data.mode === 'demo' ? 'Demo (synthetic fixtures)' : 'Live');
+  addDef(dl, 'Mode', data.mode === 'backend' ? 'Live (FCA/CCA Compliance Backend API)' : data.mode === 'demo' ? 'Demo (synthetic fixtures)' : 'Live');
   addDef(dl, 'Poll interval', `${data.poll_seconds} seconds`);
   addDef(dl, 'Alert relay', data.relay_configured ? 'Configured' : 'Not configured');
   addDef(dl, 'Sources discovered', String(names().length));
   addDef(dl, 'Last cycle', data.last_cycle ? when(data.last_cycle) : 'Not finished yet');
+  if (backendHealth) {
+    addDef(dl, 'GitHub organisation', backendHealth.default_org || '—');
+    addDef(dl, 'LLM model', backendHealth.model_name || '—');
+    addDef(dl, 'FCA Handbook RAG MCP', `${backendHealth.fca_mcp_url} (${backendHealth.fca_mcp_reachable ? 'reachable' : 'unreachable'})`);
+    addDef(dl, 'Consumer Credit Act MCP', `${backendHealth.cca_mcp_url} (${backendHealth.cca_mcp_reachable ? 'reachable' : 'unreachable'})`);
+    addDef(dl, 'Persisted backend reports', String(backendHealth.reports_count ?? 0));
+  }
 }
 
 // ---------- Export ----------
@@ -520,9 +578,14 @@ async function api(url, opts = {}) {
   return r.json();
 }
 
+let healthTick = 0;
 async function refresh() {
   try {
     data = await api('/api/status');
+    if (data.compliance_api_configured && (!backendHealth || healthTick % 10 === 0)) {
+      api('/api/backend/health').then(h => { backendHealth = h; render(); }).catch(() => {});
+    }
+    healthTick++;
     render();
   } catch {
     $('status').textContent = 'Disconnected — results may be stale';
@@ -530,6 +593,67 @@ async function refresh() {
     $('header-status').className = 'chip risk';
   } finally {
     setTimeout(refresh, 1500);
+  }
+}
+
+async function runBackendTarget(payload, labelText) {
+  if (busy) return;
+  busy = true;
+  render();
+  const statusEl = $('backend-run-status');
+  const artEl = $('backend-run-artifacts');
+  if (statusEl) statusEl.textContent = 'Starting live review: ' + labelText + '…';
+  if (artEl) artEl.replaceChildren();
+  say('Starting live backend review: ' + labelText);
+  try {
+    const run = await api('/api/backend/runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const msg = `Run ${run.run_id} (${run.status}) · ${labelText}`;
+    if (statusEl) statusEl.textContent = msg;
+    say(msg);
+    for (let i = 0; i < 600; i++) {
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      const cur = await api('/api/backend/runs/' + encodeURIComponent(run.run_id));
+      if (statusEl) statusEl.textContent = `Run ${cur.run_id} (${cur.status}) · ${labelText}`;
+      if (cur.status === 'failed') {
+        const err = `Run ${cur.run_id} failed: ${cur.error || 'Unknown error'}`;
+        if (statusEl) statusEl.textContent = err;
+        say(err);
+        break;
+      }
+      if (cur.status === 'completed') {
+        const rep = cur.findings_report;
+        const deliv = cur.deliverable_result;
+        const doneMsg = rep
+          ? `Completed ${cur.run_id}: ${rep.overall_verdict} (${(rep.findings || []).length} finding(s))`
+          : `Completed ${cur.run_id}`;
+        if (statusEl) statusEl.textContent = deliv?.summary ? `${doneMsg} · ${deliv.summary}` : doneMsg;
+        say(deliv?.summary ? `${doneMsg}\n${deliv.summary}` : doneMsg);
+        if (artEl && (deliv?.artifacts || []).length) {
+          for (const a of deliv.artifacts) {
+            if (/^https?:\/\//i.test(a)) {
+              const link = el('a', a);
+              link.href = a;
+              link.target = '_blank';
+              link.rel = 'noopener noreferrer';
+              artEl.append(link);
+            }
+          }
+        }
+        data = await api('/api/status');
+        break;
+      }
+    }
+  } catch (e) {
+    const err = 'Backend review failed: ' + e.message;
+    if (statusEl) statusEl.textContent = err;
+    say(err);
+  } finally {
+    busy = false;
+    render();
   }
 }
 
@@ -604,15 +728,27 @@ $('verify').onclick = () => rescan(selected);
 $('rescan').onclick = () => rescan(selected);
 $('chat-toggle').onclick = () => toggleChat($('chat').hidden);
 $('close').onclick = () => toggleChat(false);
+$('custom-target-form').onsubmit = e => {
+  e.preventDefault();
+  const url = $('custom-target-url').value.trim();
+  if (!url) return;
+  const writeGh = $('backend-write-github').checked;
+  if (/\/pull\/\d+/i.test(url)) {
+    runBackendTarget({ mode: 'pr_review', pr_url: url, post_to_github: writeGh }, url);
+  } else {
+    runBackendTarget({ mode: 'codebase_review', repo_url: url, create_pr: writeGh }, url);
+  }
+};
 $('chat-form').onsubmit = e => {
   e.preventDefault();
   const q = $('prompt').value.trim();
   $('prompt').value = '';
   if (!q) return;
   say(q, true);
-  if (/rescan|verify|scan|fix/i.test(q)) rescan(selected);
+  if (/github\.com\//i.test(q) && data?.compliance_api_configured) runBackendTarget({ mode: 'chat', message: q }, q);
+  else if (/rescan|verify|scan|fix/i.test(q)) rescan(selected);
   else if (/status/i.test(q)) say($('status').textContent);
-  else say('Supported commands: rescan, verify fix, status.');
+  else say('Supported commands: rescan, verify fix, status, or paste a GitHub repo/PR URL.');
 };
 
 showView();
